@@ -1,3 +1,7 @@
+// Modifications copyright (c) 2026 Romain Tisserand.
+// This file is derived from third-party code and is NOT original work of
+// this project; only the changes made here are covered by the line above.
+// See THIRD_PARTY_LICENSES.md for the upstream project, author and licence.
 // Implementation of HDMI Spec v1.4a
 // By Sameer Puri https://github.com/sameer
 
@@ -68,6 +72,46 @@ module hdmi
     input logic clk_audio,
     // synchronous reset back to 0,0
     input logic reset,
+    // PCE PORT (2026-09-21): a RASTER-ONLY reset, separate from `reset` on purpose.
+    //
+    // Exact-lock mode sets the phase between the source frame and the output frame by
+    // slamming cx/cy back to the origin once, when the source geometry changes (see
+    // pce2hdmi_sd.sv). MiSTle-Dev/c64nano drives the ordinary `reset` for this, and the
+    // first attempt here copied that -- which cost 3 setup violations on Console 60K
+    // (clk_pce margin +0.250% -> +0.016%). `reset` fans out to every register in this
+    // file INCLUDING the serializer, and with it tied to a constant all of that reset
+    // logic had been pruned; driving it live un-pruned a high-fanout net on the 300 MHz
+    // TMDS clock. c64nano gets away with it because its TMDS runs at 157.5 MHz.
+    //
+    // This input touches cx/cy only, so `reset` stays constant-0 and everything else
+    // stays pruned. It also avoids glitching the packet and serializer state mid-frame,
+    // which the wide reset would have done on every geometry change.
+    //
+    // Defaulted so the other instantiation (pce2hdmi.sv) needs no change, same pattern
+    // as vtotal_extra below.
+    input logic vreset = 1'b0,
+
+    // PCE PORT (2026-09-09): restart ONLY the raster counters, without touching the rest
+    // of the module's reset network. Used to genlock the output frame to an external
+    // source's VSYNC. Driving the full `reset` above does work, but asserting it at all
+    // Extra blanking lines appended to the END of the frame (after VSYNC, so the sync
+    // pulse itself never moves). Latched once per frame, so VTOTAL is constant for the
+    // whole frame the sink is measuring.
+    //
+    // WHY THIS AND NOT A RASTER RESET: an earlier revision had a `sync_reset` that
+    // rewound cx/cy to genlock to an asynchronous source. That is wrong. cx/cy are not
+    // the only per-frame sequencer in this module -- the video guard/preamble windows
+    // below key off `frame_height - 1`, and the packet picker and audio-clock
+    // regeneration downstream pace themselves off the same raster. Rewinding cx/cy
+    // alone desynchronises all of them from the raster they are stamping into; when the
+    // rewind landed in blanking a sink tolerated one malformed island per frame, and
+    // when it landed in active video the sink dropped the link entirely.
+    //
+    // Varying VTOTAL instead keeps every sequencer's notion of "the frame" intact --
+    // frame_height below IS the effective height, so the guard/preamble windows track
+    // it -- and a few extra blanking lines is an ordinary, legal thing for a source to
+    // do. Defaulted so every existing instantiation is unchanged.
+    input logic [7:0] vtotal_extra = 8'd0,
     input logic [23:0] rgb,
     input logic [AUDIO_BIT_WIDTH-1:0] audio_sample_word [1:0],
 
@@ -94,6 +138,12 @@ localparam int NUM_CHANNELS = 3;
 logic hsync;
 logic vsync;
 
+logic [BIT_HEIGHT-1:0] frame_height_base;
+logic [7:0] vtotal_extra_lat = 8'd0;
+// The effective VTOTAL. Everything downstream that asks "how tall is this frame" reads
+// this, so the extra lines are invisible to the rest of the module.
+assign frame_height = frame_height_base + BIT_HEIGHT'(vtotal_extra_lat);
+
 logic [BIT_WIDTH-1:0] hsync_pulse_start, hsync_pulse_size;
 logic [BIT_HEIGHT-1:0] vsync_pulse_start, vsync_pulse_size;
 logic invert;
@@ -104,7 +154,7 @@ generate
         1:
         begin
             assign frame_width = 800;
-            assign frame_height = 525;
+            assign frame_height_base = 525;
             assign screen_width = 640;
             assign screen_height = 480;
             assign hsync_pulse_start = 16;
@@ -116,7 +166,7 @@ generate
         2, 3:
         begin
             assign frame_width = 858;
-            assign frame_height = 525;
+            assign frame_height_base = 525;
             assign screen_width = 720;
             assign screen_height = 480;
             assign hsync_pulse_start = 16;
@@ -128,7 +178,7 @@ generate
         4:
         begin
             assign frame_width = 1650;
-            assign frame_height = 750;
+            assign frame_height_base = 750;
             assign screen_width = 1280;
             assign screen_height = 720;
             assign hsync_pulse_start = 110;
@@ -137,10 +187,104 @@ generate
             assign vsync_pulse_size = 5;
             assign invert = 0;
         end
+        // PCE PORT: custom mode 200 -- "PCE exact lock", built to MiSTle-Dev/c64nano's
+        // recipe rather than as a free-form custom timing.
+        //
+        // THE PROBLEM. Every standard mode has a pixel clock irrational against the PC
+        // Engine's line rate, so the line doubler shows each source line for 2 or 3 output
+        // lines in a crawling pattern (the shimmer), and the frame servo has to dither
+        // VTOTAL between two integers to absorb the rest (the tremor). Both are consequences
+        // of a non-integer ratio, not bugs.
+        //
+        // THE RECIPE, read out of c64nano/src/hdmi/hdmi.sv. Its NTSC mode is:
+        //     htiming0 = { 1040, 720, 16, 62 }   vtiming0 = { 526, 480, 9, 6 }   cea0 = 2
+        // That is a REAL CEA 480p active area (720x480) under the REAL VIC (2), with the
+        // rate error pushed entirely into blanking and a faster-than-standard pixel clock.
+        // A sink therefore sees exactly the active area and VIC it expects; only H_total
+        // and the clock are off, by under 1% in line rate. That is why a non-standard
+        // raster is accepted by consumer displays -- NOT because sinks tolerate arbitrary
+        // timings, which was the assumption behind the first cut of this mode.
+        //
+        // c64nano's NTSC frame is 526 lines = 263 x 2, and 263 is ALSO the PC Engine's
+        // NTSC line count. Its line rate (15.734 kHz real) is within 0.2% of PCE's 15.699.
+        // The closest geometric match that exists to this core chose 480p, not 720p.
+        //
+        // APPLIED HERE:
+        //     source line = 2730 core dots / 42.857 MHz   = 63.700 us
+        //     output line =  858 pixels    / 26.8750 MHz  = 31.926 us  (ratio EXACTLY 2)
+        //     V_total     = 526 = 263 x 2                 -> frame rate locks on both sides
+        //     active      = 720 x 480, declared VIC 2      -> what the sink expects to see
+        //
+        //                     c64nano NTSC | here   | real CEA 480p60
+        //     active            720x480    | 720x480| 720x480
+        //     VIC                    2     |    2   |    2
+        //     V_total              526     |   526  |   525
+        //     H_total             1040     |   858  |   858
+        //     pixel clock      32.5 MHz    | 26.8750|  27.027
+        //     H blanking           31%     |   16%  |    16%
+        //
+        // WHY NOT x3. H_total = 1365 * ODIV_pce/ODIV_pixel. x3 cannot get below 1274, and
+        // 1274 < 1280, so a standard 720p active area does not fit in the line at all --
+        // the recipe above is simply unavailable there. x2 reaches 858 exactly. Both clocks are integer taps off the core's own 1200 MHz VCO
+        // (console60k_pll.vhd), so this is a rational lock, not a servo chasing a beat,
+        // and clk_pce is untouched.
+        //
+        // Sync values are c64nano's, which are themselves the standard 480p ones: front
+        // porch 16, hsync 62, vsync at line 9 for 6 lines. The extra blanking all lands in
+        // the back porch, exactly as it does in c64nano.
+        //
+        // 720x480 under VIC 2 is NON-SQUARE (displayed 4:3), so pce2hdmi_sd.sv disables its
+        // own 4:3 windowing for this mode and fills all 720 pixels, letting the sink apply
+        // the aspect -- the same thing real 480p hardware does.
+        200:
+        begin
+            assign frame_width = 858;
+            // The EXACT value: 526 = 263 x 2, with vtotal_extra forced to 0 for this mode
+            // (see pce2hdmi_sd.sv). It was briefly a servo base instead; under an exact
+            // lock a VTOTAL servo has no unique fixed point, so its sigma-delta stage
+            // dithers forever and that dither IS the tremor this mode exists to remove.
+            // Phase is set once by vreset instead, as c64nano's video_analyzer.v does.
+            assign frame_height_base = 526;
+            assign screen_width = 720;
+            // 480, not the 484 the source supplies (242 active lines doubled). Cropping 4
+            // lines is what buys the exact CEA active area, and c64nano makes the same
+            // trade -- its "std" mode shows 480 of its own 484 and only its overscan mode
+            // shows all of them.
+            assign screen_height = 480;
+            assign hsync_pulse_start = 16;
+            assign hsync_pulse_size = 62;
+            assign vsync_pulse_start = 9;
+            assign vsync_pulse_size = 6;
+            assign invert = 1;
+        end
+        // SMS PORT (2026-09-22): custom mode 201 -- "SMS exact lock", same idea as mode 200
+        // above but with the Master System's own line count. A source line is 3420 core
+        // clocks at 53.75 MHz; clk_pixel is exactly half the core clock, so one source line
+        // is 1710 pixel clocks and two output lines are 855 each. 262 source lines x 2 =
+        // 524 output lines. The active area is the real CEA 720x480 and the frame declares
+        // VIC 2, so a sink treats it as 480p60; only the blanking differs (855x524 vs
+        // 858x525), which is what makes every source line exactly two output lines.
+        // sms2hdmi_sd.sv centres the picture in that window and sets the phase with vreset.
+        201:
+        begin
+            assign frame_width = 855;
+            assign frame_height_base = 524;
+            assign screen_width = 720;
+            assign screen_height = 480;
+            // 855 total - 720 active = 135 of blanking, so the CEA 480p back porch (60)
+            // loses 3 pixels; the front porch and the sync pulse itself are unchanged.
+            assign hsync_pulse_start = 16;
+            assign hsync_pulse_size = 62;
+            // 524 - 480 = 44 blanking lines, one less than CEA's 45: the back porch
+            // absorbs it, the sync pulse and front porch keep their standard values.
+            assign vsync_pulse_start = 9;
+            assign vsync_pulse_size = 6;
+            assign invert = 1;
+        end
         16, 34:
         begin
             assign frame_width = 2200;
-            assign frame_height = 1125;
+            assign frame_height_base = 1125;
             assign screen_width = 1920;
             assign screen_height = 1080;
             assign hsync_pulse_start = 88;
@@ -152,7 +296,7 @@ generate
         17, 18:
         begin
             assign frame_width = 864;
-            assign frame_height = 625;
+            assign frame_height_base = 625;
             assign screen_width = 720;
             assign screen_height = 576;
             assign hsync_pulse_start = 12;
@@ -164,7 +308,7 @@ generate
         19:
         begin
             assign frame_width = 1980;
-            assign frame_height = 750;
+            assign frame_height_base = 750;
             assign screen_width = 1280;
             assign screen_height = 720;
             assign hsync_pulse_start = 440;
@@ -176,7 +320,7 @@ generate
         95, 105, 97, 107:
         begin
             assign frame_width = 4400;
-            assign frame_height = 2250;
+            assign frame_height_base = 2250;
             assign screen_width = 3840;
             assign screen_height = 2160;
             assign hsync_pulse_start = 176;
@@ -200,7 +344,12 @@ always_comb begin
         vsync <= invert ^ (cy >= screen_height + vsync_pulse_start && cy < screen_height + vsync_pulse_start + vsync_pulse_size);
 end
 
-localparam real VIDEO_RATE = (VIDEO_ID_CODE == 1 ? 25.2E6
+// PCE PORT: mode 200 runs at 940.625/35 = 26.875 MHz. VIDEO_RATE feeds the audio clock
+// regeneration (CTS/N); getting it wrong silently detunes HDMI audio, which matters here
+// because CD-DA is half the point of this core.
+localparam real VIDEO_RATE = (VIDEO_ID_CODE == 201 ? 26.875E6
+                            : VIDEO_ID_CODE == 200 ? 26.875E6
+    : VIDEO_ID_CODE == 1 ? 25.2E6
     : VIDEO_ID_CODE == 2 || VIDEO_ID_CODE == 3 ? 27.027E6
     : VIDEO_ID_CODE == 4 ? 74.25E6
     : VIDEO_ID_CODE == 16 ? 148.5E6
@@ -213,15 +362,20 @@ localparam real VIDEO_RATE = (VIDEO_ID_CODE == 1 ? 25.2E6
 // Wrap-around pixel position counters indicating the pixel to be generated by the user in THIS clock and sent out in the NEXT clock.
 always_ff @(posedge clk_pixel)
 begin
-    if (reset)
+    if (reset || vreset)
     begin
         cx <= BIT_WIDTH'(START_X);
         cy <= BIT_HEIGHT'(START_Y);
+        vtotal_extra_lat <= 8'd0;
     end
     else
     begin
         cx <= cx == frame_width-1'b1 ? BIT_WIDTH'(0) : cx + 1'b1;
         cy <= cx == frame_width-1'b1 ? cy == frame_height-1'b1 ? BIT_HEIGHT'(0) : cy + 1'b1 : cy;
+        // Sample the requested VTOTAL exactly once, on the last pixel of the frame, so
+        // it can never change under the guard/preamble comparisons mid-frame.
+        if (cx == frame_width-1'b1 && cy == frame_height-1'b1)
+            vtotal_extra_lat <= vtotal_extra;
     end
 end
 
@@ -312,7 +466,15 @@ generate
             .AUDIO_BIT_WIDTH(AUDIO_BIT_WIDTH),
             .VENDOR_NAME(VENDOR_NAME),
             .PRODUCT_DESCRIPTION(PRODUCT_DESCRIPTION),
-            .SOURCE_DEVICE_INFORMATION(SOURCE_DEVICE_INFORMATION)
+            .SOURCE_DEVICE_INFORMATION(SOURCE_DEVICE_INFORMATION),
+            // The VIC the AVI InfoFrame ADVERTISES, which is not always the internal mode
+            // number. Mode 200 sends a standard 720x480 active area and declares VIC 2 for
+            // it, which is the whole reason a sink accepts the non-standard blanking.
+            .AVI_VIC((VIDEO_ID_CODE == 200 || VIDEO_ID_CODE == 201) ? 2 : VIDEO_ID_CODE),
+            // 4:3 for the exact-lock mode only; every other mode keeps "No Data" so its
+            // netlist is unchanged. Verified on hardware: a monitor on "Aspect" pillarboxes
+            // mode 200 correctly with this set.
+            .PICTURE_ASPECT_RATIO((VIDEO_ID_CODE == 200 || VIDEO_ID_CODE == 201) ? 2'b01 : 2'b00)
         ) packet_picker (.clk_pixel(clk_pixel), .clk_audio(clk_audio), .reset(reset), .video_field_end(video_field_end), .packet_enable(packet_enable), .packet_pixel_counter(packet_pixel_counter), .audio_sample_word(audio_sample_word), .header(header), .sub(sub));
         logic [8:0] packet_data;
         packet_assembler packet_assembler (.clk_pixel(clk_pixel), .reset(reset), .data_island_period(data_island_period), .header(header), .sub(sub), .packet_data(packet_data), .counter(packet_pixel_counter));

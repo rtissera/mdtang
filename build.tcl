@@ -7,6 +7,15 @@ if {$argc == 0} {
 
 set dev [lindex $argv 0]
 
+# EXACT LOCK (2026-09-22): console60k with the video clocks taken off the core's own VCO.
+# Removes the 32-line buffer AND the once-per-frame core pause. See src/plla/pll_exact.v,
+# src/framebuffer_exact.sv, hdmi mode 201.
+set exact 0
+if {$dev eq "console60k_exact"} {
+    set exact 1
+    set dev "console60k"
+}
+
 if {$dev eq "mega60k"} {
     set_device GW5AT-LV60PG484AC1/I0 -device_version B
     add_file -type cst "src/boards/mega.cst"
@@ -17,9 +26,15 @@ if {$dev eq "mega60k"} {
     set_device GW5AT-LV60PG484AC1/I0 -device_version B
     add_file -type verilog "src/boards/console.v"
     add_file -type cst "src/boards/console.cst"
-    add_file -type verilog "src/plla/pll.v"
-    add_file -type verilog "src/plla/pll_27.v"
-    add_file -type verilog "src/plla/pll_74.v"    
+    if {$exact} {
+        add_file -type verilog "src/config_exact.v"
+        add_file -type verilog "src/plla/pll_exact.v"
+    } else {
+        add_file -type verilog "src/plla/pll.v"
+        add_file -type verilog "src/plla/pll_27.v"
+        add_file -type verilog "src/plla/pll_74.v"
+    }
+    
     add_file -type verilog "src/usb_hid_host.v"
     add_file -type verilog "src/plla/pll_12.v"
 } elseif {$dev eq "console138k"} {
@@ -46,8 +61,16 @@ if {$dev eq "mega60k"} {
 } else {
     error "Unknown device $dev"
 }
-add_file -type sdc "src/mdtang.sdc"
-set_option -output_base_name mdtang_${dev}
+if {$exact} {
+    add_file -type sdc "src/mdtang_exact.sdc"
+} else {
+    add_file -type sdc "src/mdtang.sdc"
+}
+if {$exact} {
+    set_option -output_base_name mdtang_console60k_exact
+} else {
+    set_option -output_base_name mdtang_${dev}
+}
 
 add_file -type verilog "src/iosys/iosys_bl616.v"
 add_file -type verilog "src/iosys/uart_fixed.v"
@@ -72,7 +95,11 @@ add_file -type verilog "src/hdmi/packet_picker.sv"
 add_file -type verilog "src/hdmi/serializer.sv"
 add_file -type verilog "src/hdmi/source_product_description_info_frame.sv"
 add_file -type verilog "src/hdmi/tmds_channel.sv"
-add_file -type verilog "src/framebuffer_sync.sv"
+if {$exact} {
+    add_file -type verilog "src/framebuffer_exact.sv"
+} else {
+    add_file -type verilog "src/framebuffer_sync.sv"
+}
 add_file -type verilog "src/jt12/adpcm/jt10_adpcm_div.v"
 add_file -type verilog "src/jt12/jt12.v"
 add_file -type verilog "src/jt12/jt12_acc.v"
@@ -139,6 +166,12 @@ add_file -type verilog "src/vdp/vdp.v"
 add_file -type verilog "src/vdp/vdp_common.v"
 add_file -type verilog "src/vdp/vram.v"
 
+if {$exact} {
+    # Two clk_sys -> clk_z80 control paths miss hold by 15-53 ps once the Z80 clock comes
+    # off a different PLL divider; let the router fix them rather than hiding them with a
+    # false path.
+    set_option -correct_hold_violation 1
+}
 set_option -synthesis_tool gowinsynthesis
 set_option -top_module mdtang_top
 set_option -include_path {"src/common"}

@@ -9,6 +9,8 @@ module auxiliary_video_information_info_frame
     parameter bit [1:0] BAR_INFO = 2'b00, // Not valid
     parameter bit [1:0] SCAN_INFO = 2'b00, // No data
     parameter bit [1:0] COLORIMETRY = 2'b00, // No data
+    // Default kept at main's 2'b00 "No Data" so every existing mode stays bit-identical --
+    // see the PICTURE_ASPECT_RATIO pass-through in packet_picker.sv for why.
     parameter bit [1:0] PICTURE_ASPECT_RATIO = 2'b00, // No data, See CEA-CEB16 for more information about Active Format Description processing.
     parameter bit [3:0] ACTIVE_FORMAT_ASPECT_RATIO = 4'b1000, // Not valid unless ACTIVE_FORMAT_INFO_PRESENT = 1'b1, then Same as picture aspect ratio
     parameter bit IT_CONTENT = 1'b0, //  The IT content bit indicates when picture content is composed according to common IT practice (i.e. without regard to Nyquist criterion) and is unsuitable for analog reconstruction or filtering. When the IT content bit is set to 1, downstream processors should pass pixel data unfiltered and without analog reconstruction.
@@ -42,7 +44,15 @@ assign packet_bytes[0] = 8'd1 + ~(header[23:16] + header[15:8] + header[7:0] + p
 assign packet_bytes[1] = {1'b0, VIDEO_FORMAT, ACTIVE_FORMAT_INFO_PRESENT, BAR_INFO, SCAN_INFO};
 assign packet_bytes[2] = {COLORIMETRY, PICTURE_ASPECT_RATIO, ACTIVE_FORMAT_ASPECT_RATIO};
 assign packet_bytes[3] = {IT_CONTENT, EXTENDED_COLORIMETRY, RGB_QUANTIZATION_RANGE, NON_UNIFORM_PICTURE_SCALING};
-assign packet_bytes[4] = {1'b0, 7'(VIDEO_ID_CODE)};
+// PCE PORT (2026-09-20): codes above 127 are this port's private custom modes -- see
+// hdmi.sv case 200, the exact-lock timing. The VIC field is only 7 bits and just 1..127
+// are defined, so advertising 200 would TRUNCATE to 72, a real and completely unrelated
+// code (1920x1080p24, 64:27). A sink told "1080p24" while receiving 480p-shaped timing is
+// far more likely to refuse or mis-scale than one told nothing.
+//
+// VIC 0 is the legal "no applicable CEA-861 code" value: the sink is expected to use the
+// timing exactly as received. That is precisely what a custom mode wants.
+assign packet_bytes[4] = {1'b0, (VIDEO_ID_CODE > 127) ? 7'd0 : 7'(VIDEO_ID_CODE)};
 assign packet_bytes[5] = {YCC_QUANTIZATION_RANGE, CONTENT_TYPE, PIXEL_REPETITION};
 
 genvar i;

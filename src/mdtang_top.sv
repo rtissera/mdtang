@@ -93,9 +93,26 @@ wire clk_z80;       // 26.85Mhz (1/2 clk_sys)
 // pll_all pllall(.clkout0(clk_sys),.clkout1(O_sdram_clk),.clkout2(hclk), .clkout3(hclk5),.clkin(clk27));
 
 // use external osc
+`ifdef EXACT_LOCK
+// EXACT LOCK (2026-09-22): one VCO for core, SDRAM, Z80 and both video clocks, so every
+// source line is exactly two output lines -- no frame buffer and no core pause needed.
+// See src/plla/pll_exact.v and src/framebuffer_exact.sv.
+wire clk_z80_unused;
+pll_exact pll(.clkin(clk50), .clkout0(clk_sys), .clkout1(O_sdram_clk), .clkout2(clk_z80_unused),
+              .clkout3(hclk), .clkout4(hclk5));
+// The Z80 clock is clk_sys/2 BY DEFINITION. Taking it from a second PLL output (as the
+// stock build does) leaves ~0.35 ns of skew against clk_sys, which costs two hold
+// violations on the clk_sys -> clk_z80 control signals once the divider ratios change.
+// CLKDIV divides the core clock itself, so the two edges cannot separate.
+CLKDIV #(.DIV_MODE("2")) z80_div (
+    .CLKOUT(clk_z80), .HCLKIN(clk_sys), .RESETN(1'b1), .CALIB(1'b0)
+);
+assign clk27 = 1'b0;            // the 27 MHz chain existed only to reach 74.25 MHz
+`else
 pll pll(.clkin(clk50), .clkout0(clk_sys), .clkout1(O_sdram_clk), .clkout2(clk_z80));
 pll_27 pll27(.clkin(clk50), .clkout0(clk27));
 pll_74 pll74(.clkin(clk27), .clkout0(hclk), .clkout1(hclk5));
+`endif
 
 wire [2:0]  loading;
 wire        loader_do_valid;
@@ -316,6 +333,20 @@ always @(posedge clk_sys) begin
     end
 end
 
+`ifdef EXACT_LOCK
+framebuffer_exact #(
+    .WIDTH(320), .HEIGHT(240), .COLOR_BITS(4)
+) fb (
+    .clk(clk_sys), .resetn(~reset), .clk_pixel(hclk), .clk_5x_pixel(hclk5),
+    .ce_pix(ce_pix & hsync_seen), .r(red), .g(green), .b(blue), .x(x), .y(y),
+    .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),
+    .audio_left(audio_left), .audio_right(audio_right),
+    .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
+    .pause_core(pause_core),
+    .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
+    .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
+);
+`else
 framebuffer #(
     .WIDTH(320), .HEIGHT(240), .COLOR_BITS(4)
 ) fb (
@@ -329,6 +360,7 @@ framebuffer #(
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
 );
+`endif
 
 // assign led = ~{2'b0, vblank, md_on, loading != 0, overlay, iosys_loaded, ~reset};
 
