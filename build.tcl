@@ -60,6 +60,20 @@ if {$dev eq "mega60k"} {
     set_option -use_ready_as_gpio 1
     set_option -use_i2c_as_gpio 1
     set_option -use_jtag_as_gpio 1
+    # THE LAST BLOCK. Place-and-route's -convert_sdp32_36_to_sdp16_18 (Gowin option PNR30,
+    # on by default in rtlplacerouteoptions5at.xml) splits every 36-bit-wide simple
+    # dual-port BSRAM into two 18-bit ones. This design has exactly one: the VDP's
+    # sprite-info table (64 x 35, vdp.v obj_spinfo). Synthesis counts it as 1 block, the
+    # placer as 2, so 56 became 57 against this device's 56. Turning the conversion off
+    # keeps it at one block.
+    #
+    # RISK, unresolved: Gowin defaults this on and does not document why -- it may be a
+    # workaround for 36-bit SDP behaviour on this silicon. Nothing here proves otherwise;
+    # the build fits and closes timing, and that is all it proves. Watch the sprites.
+    #
+    # Rejected alternative: moving that table into LUT RAM. Gowin ignored the attribute on
+    # an inline 64 x 35 array and inferred it worse (58 blocks).
+    set_option -convert_sdp32_36_to_sdp16_18 0
 } elseif {$dev eq "console138k"} {
     set_device GW5AST-LV138PG484AC1/I0 -device_version B
     add_file -type verilog "src/boards/console.v"
