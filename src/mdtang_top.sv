@@ -163,6 +163,13 @@ wire [11:0] joy1 = btn_snes2md(joy_btns | hid1 | joy_usb1);
 wire [11:0] joy2 = btn_snes2md(joy2_btns | hid2 | joy_usb2);
 
 // MegaDrive system -------------------------------------------------------------------
+`ifdef ZRAM_SDRAM
+wire [24:1] zram_mem_addr;
+wire [15:0] zram_mem_data, zram_mem_wdata;
+wire        zram_mem_we, zram_mem_req, zram_mem_ack;
+wire  [1:0] zram_mem_be;
+`endif
+
 system megadrive (
     .MCLK(clk_sys), .CLK_Z80(clk_z80), .RESET_N(md_on),
     .LPF_MODE('1), .ENABLE_FM('1), .ENABLE_PSG('1), .DAC_LDATA(audio_left), .DAC_RDATA(audio_right),
@@ -178,6 +185,11 @@ system megadrive (
     .SERJOYSTICK_IN('0), .SERJOYSTICK_OUT(), .SER_OPT('0),
     .MEM_ADDR(mem_addr), .MEM_DATA(mem_data), .MEM_WDATA(mem_wdata), .MEM_WE(mem_we), .MEM_BE(mem_be),
     .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ(loader_addr[21:1]),
+`ifdef ZRAM_SDRAM
+    .ZRAM_MEM_ADDR(zram_mem_addr), .ZRAM_MEM_DATA(zram_mem_data), .ZRAM_MEM_WDATA(zram_mem_wdata),
+    .ZRAM_MEM_WE(zram_mem_we), .ZRAM_MEM_BE(zram_mem_be),
+    .ZRAM_MEM_REQ(zram_mem_req), .ZRAM_MEM_ACK(zram_mem_ack),
+`endif
     .EN_HIFI_PCM('0), .LADDER('0), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
     .PAUSE_EN(pause_core), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
 );
@@ -247,8 +259,17 @@ sdram #(.FREQ(FREQ)) u_sdram (
     .addr1(loader_addr[21:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
 	.din1({2{loader_do}}), .dout1(), 
 
+`ifdef ZRAM_SDRAM
+    // Channel 2 is the RISC-V's in the picorv32 build; with the BL616 companion it is
+    // unused, so the Z80's 8 KB goes here instead of costing 4 BSRAM blocks. See the
+    // ramZ80 comment in system.sv -- it is shared with the 68000 through the Z80 bus
+    // window, and the ZBUS state machine already serialises the two.
+    .addr2(zram_mem_addr), .req2(zram_mem_req), .ack2(zram_mem_ack), .wr2(zram_mem_we), .be2(zram_mem_be),
+	.din2(zram_mem_wdata), .dout2(zram_mem_data),
+`else
     .addr2({2'b10, rv_mem_addr}), .req2(rv_mem_req), .ack2(rv_mem_ack), .wr2(rv_mem_we), .be2(rv_mem_ds),
 	.din2(rv_mem_din), .dout2(rv_mem_dout),
+`endif
 
     .SDRAM_DQ(IO_sdram_dq), .SDRAM_A(O_sdram_addr), .SDRAM_BA(O_sdram_ba),      
     .SDRAM_nCS(O_sdram_cs_n), .SDRAM_nWE(O_sdram_wen_n),  .SDRAM_nRAS(O_sdram_ras_n), 

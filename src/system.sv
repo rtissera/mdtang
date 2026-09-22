@@ -127,6 +127,18 @@ module system
 	output reg    MEM_REQ,
 	input         MEM_ACK,
 
+`ifdef ZRAM_SDRAM
+	// The Z80's 8 KB lives in SDRAM instead of block RAM (see the ramZ80 comment below).
+	// Same toggle-request protocol as MEM_*, on its own SDRAM channel.
+	output reg [24:1] ZRAM_MEM_ADDR,
+	input      [15:0] ZRAM_MEM_DATA,
+	output     [15:0] ZRAM_MEM_WDATA,
+	output reg        ZRAM_MEM_WE,
+	output reg  [1:0] ZRAM_MEM_BE,
+	output reg        ZRAM_MEM_REQ,
+	input             ZRAM_MEM_ACK,
+`endif
+
 	// output [24:1] MEM_ADDR2,
 	// input  [15:0] MEM_DATA2,
 	// output        MEM_REQ2,
@@ -1401,6 +1413,22 @@ wire       Z80_MBUS_SEL = Z80_IO & ~Z80_ZBUS;
 wire ZRAM_SEL = ~ZBUS_A[14];
 
 wire  [7:0] ZRAM_DO;
+`ifdef ZRAM_SDRAM
+// The Z80's 8 KB of RAM in SDRAM rather than block RAM. It is shared memory: the 68000
+// reaches it through the Z80 bus window as well, and both paths already funnel through the
+// ZBUS state machine below, which serialises them and makes each master wait for its own
+// DTACK. That is what makes the move possible at all -- the wait states already exist, so
+// SDRAM latency lands somewhere the design already tolerates a stall.
+//
+// Costs 4 of this board's 56 BSRAM blocks back. The risk is not correctness but tempo:
+// the Z80 drives the FM chip, so if this path is ever slower than the ZBUS budget the
+// symptom is music timing, not a crash.
+//
+// Byte lanes follow the loader's convention in mdtang_top.sv: odd byte address -> low
+// half (be 01), even -> high half (be 10).
+assign ZRAM_MEM_WDATA = {ZBUS_DO, ZBUS_DO};
+assign ZRAM_DO = ZBUS_A[0] ? ZRAM_MEM_DATA[7:0] : ZRAM_MEM_DATA[15:8];
+`else
 dpram #(13) ramZ80
 (
 	.clock(MCLK),
@@ -1409,25 +1437,38 @@ dpram #(13) ramZ80
 	.wren_a(ZBUS_WE & ZRAM_SEL),
 	.q_a(ZRAM_DO)
 );
+`endif
 
 always @(posedge MCLK) begin
 	reg [1:0] zstate;
 	reg [1:0] zsrc;
 	reg Z80_BGACK_DIS;
+`ifdef ZRAM_SDRAM
+	// ZBUS_A and ZBUS_WE are assigned in ZBUS_IDLE and ZBUS_WE is a one-cycle strobe, so
+	// the SDRAM request latches its decode from the INCOMING address of whichever master
+	// was accepted -- reading ZRAM_SEL here would decode the previous access.
+	reg ZRAM_SEL_R;
+	reg ZBUS_WE_R;
+`endif
 
 	localparam 	ZSRC_MBUS = 0,
 				ZSRC_Z80  = 1;
 
 	localparam	ZBUS_IDLE   = 0,
 				ZBUS_READ   = 1,
-				ZBUS_FINISH = 2;
+				ZBUS_FINISH = 2,
+				ZBUS_SDRAM  = 3;    // ZRAM_SDRAM only: waiting for the SDRAM channel
 
 	ZBUS_WE <= 0;
-	
+
 	if (reset) begin
 		MBUS_ZBUS_DTACK_N <= 1;
 		Z80_ZBUS_DTACK_N  <= 1;
 		zstate <= ZBUS_IDLE;
+`ifdef ZRAM_SDRAM
+		ZRAM_MEM_REQ <= 0;
+		ZRAM_MEM_WE  <= 0;
+`endif
 		
 		Z80_BR_N <= 1;
 		Z80_BGACK_N <= 1;
@@ -1446,6 +1487,10 @@ always @(posedge MCLK) begin
 					ZBUS_A <= {MBUS_A[14:1], MBUS_UDS_N};
 					ZBUS_DO <= (~MBUS_UDS_N) ? MBUS_DO[15:8] : MBUS_DO[7:0];
 					ZBUS_WE <= ~MBUS_RNW & ZBUS_FREE;
+`ifdef ZRAM_SDRAM
+					ZRAM_SEL_R <= ~MBUS_A[14];
+					ZBUS_WE_R  <= ~MBUS_RNW & ZBUS_FREE;
+`endif
 					zsrc <= ZSRC_MBUS;
 					zstate <= ZBUS_READ;
 				end
@@ -1453,13 +1498,34 @@ always @(posedge MCLK) begin
 					ZBUS_A <= Z80_A[14:0];
 					ZBUS_DO <= Z80_DO;
 					ZBUS_WE <= ~Z80_WR_N;
+`ifdef ZRAM_SDRAM
+					ZRAM_SEL_R <= ~Z80_A[14];
+					ZBUS_WE_R  <= ~Z80_WR_N;
+`endif
 					zsrc <= ZSRC_Z80;
 					zstate <= ZBUS_READ;
 				end
 			end
 
 		ZBUS_READ:
+`ifdef ZRAM_SDRAM
+			// Z80 RAM accesses go out to SDRAM and wait for the acknowledge; everything
+			// else on this bus (the FM chip) still completes in the cycle it always did.
+			if (ZRAM_SEL_R) begin
+				ZRAM_MEM_ADDR <= {8'b0_1000_010, ZBUS_A[12:1]};
+				ZRAM_MEM_BE   <= ZBUS_A[0] ? 2'b01 : 2'b10;
+				ZRAM_MEM_WE   <= ZBUS_WE_R;
+				ZRAM_MEM_REQ  <= ~ZRAM_MEM_REQ;     // toggle: the channel's own protocol
+				zstate <= ZBUS_SDRAM;
+			end
+			else
+				zstate <= ZBUS_FINISH;
+
+		ZBUS_SDRAM:
+			if (ZRAM_MEM_ACK == ZRAM_MEM_REQ) zstate <= ZBUS_FINISH;
+`else
 			zstate <= ZBUS_FINISH;
+`endif
 
 		ZBUS_FINISH:
 			begin
