@@ -16,6 +16,7 @@ module mdtang_top (
 `endif
 
     // MicroSD
+`ifndef PRIMER25K
     output sd_clk,
     inout  sd_cmd,                  // MOSI
     input  sd_dat0,                 // MISO
@@ -30,6 +31,7 @@ module mdtang_top (
     output flash_spi_clk,           // spi clock
     output flash_spi_wp_n,          // write protect
     output flash_spi_hold_n,        // hold operations
+`endif
 
     // dualshock controller
     output ds_clk,
@@ -66,9 +68,15 @@ module mdtang_top (
     input UART_RXD,
     output UART_TXD,    
 
+`ifdef PRIMER25K
+    output [1:0] led,          // this board has two LEDs, and pins are the tight resource
+`else
     output [7:0] led,
+`endif
     input s0,
-    input s1,
+`ifndef PRIMER25K
+    input s1,               // unused by this core beyond a commented-out start gate
+`endif
 
     // HDMI output
     output       tmds_clk_n,
@@ -288,9 +296,16 @@ usb_hid_host usb_hid_host (
     .usb_dm(usb1_dn), .usb_dp(usb1_dp),
     .game_snes(joy_usb1), .typ(usb_type), .conerr(usb_conerr)
 );
+`ifdef PRIMER25K
+assign led = ~{usb_type[0], usb_conerr};
+`else
 assign led = ~{joy_usb1[4:0], usb_type, usb_conerr};
+`endif
 `else
 assign joy_usb1 = 12'b0;
+`ifdef PRIMER25K
+assign led = 2'b11;                 // no USB host on this board: both LEDs off (active low)
+`endif
 `endif
 
 `ifdef USB2
