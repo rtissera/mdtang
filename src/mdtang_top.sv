@@ -100,10 +100,10 @@ wire clk_z80;       // 26.85Mhz (1/2 clk_sys)
 wire clk_z80_unused;
 pll_exact pll(.clkin(clk50), .clkout0(clk_sys), .clkout1(O_sdram_clk), .clkout2(clk_z80_unused),
               .clkout3(hclk), .clkout4(hclk5));
-// The Z80 clock is clk_sys/2 BY DEFINITION. Taking it from a second PLL output (as the
-// stock build does) leaves ~0.35 ns of skew against clk_sys, which costs two hold
-// violations on the clk_sys -> clk_z80 control signals once the divider ratios change.
-// CLKDIV divides the core clock itself, so the two edges cannot separate.
+// The Z80 clock is clk_sys/2 BY DEFINITION, so divide the core clock itself rather than
+// taking a second PLL output (which the stock build does): the two edges then cannot
+// separate. system.sv crosses MCLK -> CLK_Z80 with a single flop for bus request and
+// reset, so that crossing's hold margin is only as good as the skew between them.
 CLKDIV #(.DIV_MODE("2")) z80_div (
     .CLKOUT(clk_z80), .HCLKIN(clk_sys), .RESETN(1'b1), .CALIB(1'b0)
 );
