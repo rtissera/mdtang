@@ -83,21 +83,34 @@ reg [$clog2(HEIGHT)-1:0] y_r = 0;
 always @(posedge clk) begin
     y_r <= y;
     if (ce_pix) begin
+        // restart at buffer 0 on source line 0 so line s always lands in buffer s mod 3;
+        // otherwise the phase slips against the read side (which restarts every frame)
         if (y != y_r)
-            wr_sel <= (wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
+            wr_sel <= (y == 0 || wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
         if (x < width)
             linebuf[wr_sel*WIDTH + x] <= {b, g, r};
     end
 end
 
 // ---------------------------------------------------------------------------------------
-// Frame phase: one `vreset` pulse aligns the output raster to the source frame, once.
+// Frame phase. Under an exact lock the raster cannot drift, so the phase is set, not
+// servoed: `vreset` loads the HDMI raster when the source starts line 0, with cy = ytop - 2
+// (mod 524). Source line s is then displayed on ytop + 2s and ytop + 2s + 1, exactly one
+// source line after it was written, while the writer fills buffer (s+1) mod 3.
 // hdmi.sv's `vreset` touches cx/cy only -- never its full `reset`, which fans out to the
 // serializer on the 134 MHz clock and costs real timing margin.
+// It fires at power-up and again ONLY when a source frame starts outside the expected
+// window: a reset or game load (VDP counters restart) or a 224/240-line switch (ytop moves).
+// Interlaced MD modes (262/263 lines) are not handled and would re-fire every frame.
 // ---------------------------------------------------------------------------------------
+localparam [9:0]  V_TOTAL = 524;
+localparam [10:0] H_TOTAL = 855;
+wire [9:0] ytop_w    = (10'd480 - {height, 1'b0}) >> 1;
+wire [9:0] vreset_cy = (ytop_w >= 10'd2) ? ytop_w - 10'd2 : ytop_w + V_TOTAL - 10'd2;
+wire [9:0] vreset_cy_m1 = (vreset_cy == 10'd0) ? V_TOTAL - 10'd1 : vreset_cy - 10'd1;
+
 reg frame_tog   = 1'b0;
 reg fs_meta     = 1'b0, fs_sync = 1'b0, fs_sync_r = 1'b0;
-reg phase_armed = 1'b1;
 reg vreset      = 1'b0;
 
 always @(posedge clk) begin
@@ -105,15 +118,13 @@ always @(posedge clk) begin
         frame_tog <= ~frame_tog;
 end
 
+wire in_phase = (cy == vreset_cy && cx < 11'd24) || (cy == vreset_cy_m1 && cx >= H_TOTAL - 11'd24);
+
 always @(posedge clk_pixel) begin
     fs_meta   <= frame_tog;
     fs_sync   <= fs_meta;
     fs_sync_r <= fs_sync;
-    vreset    <= 1'b0;
-    if (phase_armed && (fs_sync != fs_sync_r)) begin
-        vreset      <= 1'b1;
-        phase_armed <= 1'b0;
-    end
+    vreset    <= (fs_sync != fs_sync_r) && !in_phase;
 end
 
 // ---------------------------------------------------------------------------------------
@@ -137,7 +148,8 @@ reg [23:0] rgb;
 always @(posedge clk_pixel) begin
     if (cx == 0) begin
         if (cy == ytop)                 rd_sel <= 2'd0;
-        else if (v_in && cy[0] == 1'b1) rd_sel <= (rd_sel == N_LINE_BUF-1) ? 2'd0 : rd_sel + 2'd1;
+        // advance on the FIRST output line of each pair (same parity as ytop)
+        else if (v_in && cy[0] == ytop[0]) rd_sel <= (rd_sel == N_LINE_BUF-1) ? 2'd0 : rd_sel + 2'd1;
     end
 end
 
@@ -215,6 +227,7 @@ hdmi( .clk_pixel_x5(clk_5x_pixel),
         .rgb(rgb),
         .reset(1'b0),
         .vreset(vreset),
+        .vreset_cy(vreset_cy),
         .audio_sample_word(audio_sample_word),
         .tmds(tmds),
         .tmds_clock(tmdsClk),
