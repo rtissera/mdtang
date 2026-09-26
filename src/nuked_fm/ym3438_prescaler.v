@@ -1,5 +1,5 @@
 // mdtang: copied verbatim from drizzt/openfpga-MegaDrive v0.3.0 (963ac0d) rtl/upstream/nuked-md/ym3438_prescaler.v,
-// itself from nukeykt/Nuked-MD-FPGA. GPL-2.0-or-later, see LICENSE in this directory.
+// itself from nukeykt/Nuked-MD-FPGA. License: LICENSE in this directory (GPL v2); ym3438.v's own header grants v2 "or later".
 module ym3438_prescaler(
 	input MCLK,
 	input PHI,

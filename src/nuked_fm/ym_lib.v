@@ -1,5 +1,5 @@
 // mdtang: copied verbatim from drizzt/openfpga-MegaDrive v0.3.0 (963ac0d) rtl/upstream/nuked-md/ym_lib.v,
-// itself from nukeykt/Nuked-MD-FPGA. GPL-2.0-or-later, see LICENSE in this directory.
+// itself from nukeykt/Nuked-MD-FPGA. License: LICENSE in this directory (GPL v2); ym3438.v's own header grants v2 "or later".
 // ym3438, ym7101, fc1004 common cells
 
 module ym_sr_bit #(parameter SR_LENGTH = 1)
