@@ -211,6 +211,38 @@ always @(posedge clk_sys) begin
     end
 end
 
+// Region from the header, MiSTer Genesis's "auto" priority US > EU > JP (default US).
+// 0x1F0 holds a letter or the new-style hex region code; 0x1F1/0x1F2 hold letters.
+// Exact-lock builds only have an NTSC (262-line) raster, so an EU game gets NTSC export
+// timing there (PAL would need the 855x626 raster -- separate project).
+reg hdr_j = 0, hdr_u = 0, hdr_e = 0;
+wire [3:0] hrgn = loader_do[3:0] - 4'd7;
+always @(posedge clk_sys) begin
+    if (loading && !hdr_loading_r) {hdr_j, hdr_u, hdr_e} <= 0;
+    if (loader_do_valid) begin
+        if (loader_addr_next == 23'h1F0) begin
+            if (loader_do == "J") hdr_j <= 1;
+            else if (loader_do == "U") hdr_u <= 1;
+            else if (loader_do == "E") hdr_e <= 1;
+            else if (loader_do >= "0" && loader_do <= "9") {hdr_e, hdr_u, hdr_j} <= {loader_do[3], loader_do[2], loader_do[0]};
+            else if (loader_do >= "A" && loader_do <= "F") {hdr_e, hdr_u, hdr_j} <= {hrgn[3], hrgn[2], hrgn[0]};
+        end
+        if (loader_addr_next == 23'h1F1 || loader_addr_next == 23'h1F2) begin
+            if (loader_do == "J") hdr_j <= 1;
+            else if (loader_do == "U") hdr_u <= 1;
+            else if (loader_do == "E") hdr_e <= 1;
+        end
+    end
+end
+wire region_us = hdr_u || !(hdr_e || hdr_j);      // US first, and the default
+wire region_eu = !hdr_u && hdr_e;
+wire md_export = region_us || region_eu;          // JP only when the cart is JP-only
+`ifdef EXACT_LOCK
+wire md_pal = 1'b0;
+`else
+wire md_pal = region_eu;
+`endif
+
 // MegaDrive system -------------------------------------------------------------------
 `ifdef ZRAM_SDRAM
 wire [24:1] zram_mem_addr;
@@ -222,7 +254,7 @@ wire  [1:0] zram_mem_be;
 system megadrive (
     .MCLK(clk_sys), .CLK_Z80(clk_z80), .RESET_N(md_on),
     .LPF_MODE('1), .ENABLE_FM('1), .ENABLE_PSG('1), .DAC_LDATA(audio_left), .DAC_RDATA(audio_right),
-    .LOADING(loading != 0), .PAL('0), .EXPORT('1), .FAST_FIFO(fifo_quirk), .SRAM_QUIRK(sram_quirk), .SRAM00_QUIRK(sram00_quirk),
+    .LOADING(loading != 0), .PAL(md_pal), .EXPORT(md_export), .FAST_FIFO(fifo_quirk), .SRAM_QUIRK(sram_quirk), .SRAM00_QUIRK(sram00_quirk),
     .EEPROM_QUIRK(eeprom_quirk), .NORAM_QUIRK(noram_quirk), .PIER_QUIRK('0), .SVP_QUIRK('0),
     .FMBUSY_QUIRK(fmbusy_quirk), .SCHAN_QUIRK(schan_quirk), .TURBO('0), 
     .GG_RESET('0), .GG_EN('0), .GG_CODE('0), .GG_AVAILABLE(),
