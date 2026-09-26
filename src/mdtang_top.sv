@@ -216,9 +216,10 @@ end
 // Exact-lock builds only have an NTSC (262-line) raster, so an EU game gets NTSC export
 // timing there (PAL would need the 855x626 raster -- separate project).
 reg hdr_j = 0, hdr_u = 0, hdr_e = 0;
+reg six_btn = 0;             // header I/O field (0x190-0x19F) lists '6' = 6-button pad
 wire [3:0] hrgn = loader_do[3:0] - 4'd7;
 always @(posedge clk_sys) begin
-    if (loading && !hdr_loading_r) {hdr_j, hdr_u, hdr_e} <= 0;
+    if (loading && !hdr_loading_r) {hdr_j, hdr_u, hdr_e, six_btn} <= 0;
     if (loader_do_valid) begin
         if (loader_addr_next == 23'h1F0) begin
             if (loader_do == "J") hdr_j <= 1;
@@ -232,6 +233,8 @@ always @(posedge clk_sys) begin
             else if (loader_do == "U") hdr_u <= 1;
             else if (loader_do == "E") hdr_e <= 1;
         end
+        if (loader_addr_next >= 23'h190 && loader_addr_next <= 23'h19F && loader_do == "6")
+            six_btn <= 1;
     end
 end
 wire region_us = hdr_u || !(hdr_e || hdr_j);      // US first, and the default
@@ -261,7 +264,7 @@ system megadrive (
     .BRAM_A(), .BRAM_DI(), .BRAM_DO(), .BRAM_WE(), .BRAM_CHANGE(),
     .RED(red), .GREEN(green), .BLUE(blue), .VS(), .HS(hsync), .HBL(hblank), .VBL(vblank), .CE_PIX(ce_pix), 
     .BORDER('0), .CRAM_DOTS('0), .INTERLACE(), .FIELD(), .RESOLUTION(resolution),
-    .J3BUT('0), .JOY_1(joy1), .JOY_2(joy2), .JOY_3(), .JOY_4(), .JOY_5(), .MULTITAP('0),
+    .J3BUT(~six_btn), .JOY_1(joy1), .JOY_2(joy2), .JOY_3(), .JOY_4(), .JOY_5(), .MULTITAP('0),
     .MOUSE('0), .MOUSE_OPT('0), .GUN_OPT('0), .GUN_TYPE('0), .GUN_SENSOR('0), .GUN_A('0),
     .GUN_B('0), .GUN_C('0), .GUN_START('0),
     .SERJOYSTICK_IN('0), .SERJOYSTICK_OUT(), .SER_OPT('0),
@@ -490,15 +493,15 @@ function [11:0] btn_snes2md([11:0] snes);
     md[0] = snes[7];    // Right
     md[1] = snes[6];    // Left
     md[2] = snes[5];    // Down
-    md[3] = snes[4];    // Left
+    md[3] = snes[4];    // Up
     md[4] = snes[1];    // A
     md[5] = snes[0];    // B
     md[6] = snes[8];    // C
     md[7] = snes[3];    // Start
-    md[8] = 0;          // Mode
-    md[9] = 0;          // X
-    md[10] = 0;         // Y
-    md[11] = 0;         // Z
+    md[8] = snes[2];    // Mode = Select
+    md[9] = snes[10];   // X = L
+    md[10] = snes[9];   // Y = X
+    md[11] = snes[11];  // Z = R
     return md;
 endfunction
 
