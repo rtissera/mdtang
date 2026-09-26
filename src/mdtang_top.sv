@@ -184,7 +184,7 @@ system megadrive (
     .GUN_B('0), .GUN_C('0), .GUN_START('0),
     .SERJOYSTICK_IN('0), .SERJOYSTICK_OUT(), .SER_OPT('0),
     .MEM_ADDR(mem_addr), .MEM_DATA(mem_data), .MEM_WDATA(mem_wdata), .MEM_WE(mem_we), .MEM_BE(mem_be),
-    .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ(loader_addr[21:1]),
+    .MEM_REQ(mem_req), .MEM_ACK(mem_ack), .ROMSZ(loader_addr[22:1]),
 `ifdef ZRAM_SDRAM
     .ZRAM_MEM_ADDR(zram_mem_addr), .ZRAM_MEM_DATA(zram_mem_data), .ZRAM_MEM_WDATA(zram_mem_wdata),
     .ZRAM_MEM_WE(zram_mem_we), .ZRAM_MEM_BE(zram_mem_be),
@@ -196,7 +196,10 @@ system megadrive (
 
 
 reg [2:0] loading_r;
-reg [21:0] loader_addr, loader_addr_next;       // 4MB byte address, rom size after load complete
+// 23 bits = 8 MB, the whole ROM area of the SDRAM (0000000-07FFFFF). It was 22 bits (4 MB):
+// a ROM of exactly 4 MB wrapped the size to 0 (every ROM read returned 0, the game could not
+// boot), and a larger one (SSF2, 5 MB) overwrote its own start.
+reg [22:0] loader_addr, loader_addr_next;       // byte address, rom size after load complete
 reg loader_req;
 wire sdram_busy;
 always @(posedge clk_sys) begin
@@ -221,7 +224,7 @@ sdram_sim u_sdram (
     .clk(clk_sys), .resetn(1'b1), .busy(sdram_busy),
     .addr0(mem_addr), .req0(mem_req), .ack0(mem_ack), .wr0(mem_we), .be0(mem_be),
 	.din0(mem_wdata), .dout0(mem_data),
-    .addr1(loader_addr[21:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
+    .addr1(loader_addr[22:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
 	.din1({2{loader_do}}), .dout1(), 
     .addr2(), .req2(), .ack2(), .wr2(), .be2(),
 	.din2('0), .dout2()
@@ -256,7 +259,7 @@ sdram #(.FREQ(FREQ)) u_sdram (
     .addr0(mem_addr), .req0(mem_req), .ack0(mem_ack), .wr0(mem_we), .be0(mem_be),
 	.din0(mem_wdata), .dout0(mem_data),
 
-    .addr1(loader_addr[21:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
+    .addr1(loader_addr[22:1]), .req1(loader_req), .ack1(), .wr1('1), .be1(loader_addr[0] ? 2'b01 : 2'b10),    // big-endian
 	.din1({2{loader_do}}), .dout1(), 
 
 `ifdef ZRAM_SDRAM
