@@ -162,6 +162,55 @@ wire mem_req, mem_ack, mem_we;
 wire [11:0] joy1 = btn_snes2md(joy_btns | hid1 | joy_usb1);
 wire [11:0] joy2 = btn_snes2md(joy2_btns | hid2 | joy_usb2);
 
+// ROM loader address (declared here, before its first use below).
+// 23 bits = 8 MB, the whole ROM area of the SDRAM (0000000-07FFFFF). It was 22 bits (4 MB):
+// a ROM of exactly 4 MB wrapped the size to 0 (every ROM read returned 0, the game could not
+// boot), and a larger one (SSF2, 5 MB) overwrote its own start.
+reg [22:0] loader_addr, loader_addr_next;       // byte address, rom size after load complete
+
+// Cartridge header snoop -----------------------------------------------------------------
+// MiSTer Genesis (Genesis.sv) reads the serial number at 0x183-0x18A while the ROM
+// downloads and switches on per-game quirks. Same table here, fed from our UART loader:
+// the byte being written is at loader_addr_next when loader_do_valid pulses.
+reg sram_quirk = 0, sram00_quirk = 0, eeprom_quirk = 0, fifo_quirk = 0, noram_quirk = 0;
+reg fmbusy_quirk = 0, schan_quirk = 0;
+reg [63:0] cart_id;
+reg [2:0]  hdr_loading_r;
+always @(posedge clk_sys) begin
+    hdr_loading_r <= loading;
+    if (loading && !hdr_loading_r)
+        {fifo_quirk,eeprom_quirk,sram_quirk,sram00_quirk,noram_quirk,fmbusy_quirk,schan_quirk} <= 0;
+    if (loader_do_valid) begin
+        if (loader_addr_next >= 23'h183 && loader_addr_next <= 23'h18A)
+            cart_id <= {cart_id[55:0], loader_do};
+        if (loader_addr_next == 23'h18C) begin
+                 if(cart_id == "T-081276") sram_quirk   <= 1; // NFL Quarterback Club
+            else if(cart_id == "T-81406 ") sram_quirk   <= 1; // NBA Jam TE
+            else if(cart_id == "T-081586") sram_quirk   <= 1; // NFL Quarterback Club '96
+            else if(cart_id == "T-81576 ") sram_quirk   <= 1; // College Slam
+            else if(cart_id == "T-81476 ") sram_quirk   <= 1; // Frank Thomas Big Hurt Baseball
+            else if(cart_id == "MK-1215 ") eeprom_quirk <= 1; // Evander Real Deal Holyfield's Boxing
+            else if(cart_id == "G-4060  ") eeprom_quirk <= 1; // Wonder Boy
+            else if(cart_id == "00001211") eeprom_quirk <= 1; // Sports Talk Baseball
+            else if(cart_id == "MK-1228 ") eeprom_quirk <= 1; // Greatest Heavyweights
+            else if(cart_id == "G-5538  ") eeprom_quirk <= 1; // Greatest Heavyweights JP
+            else if(cart_id == "00004076") eeprom_quirk <= 1; // Honoo no Toukyuuji Dodge Danpei
+            else if(cart_id == "T-12046 ") eeprom_quirk <= 1; // Mega Man - The Wily Wars
+            else if(cart_id == "T-12053 ") eeprom_quirk <= 1; // Rockman Mega World
+            else if(cart_id == "G-4524  ") eeprom_quirk <= 1; // Ninja Burai Densetsu
+            else if(cart_id == "T-113016") noram_quirk  <= 1; // Puggsy fake ram check
+            else if(cart_id == "T-89016 ") fifo_quirk   <= 1; // Clue
+            else if(cart_id == "T-35036 ") fmbusy_quirk <= 1; // Hellfire US
+            else if(cart_id == "T-25073 ") fmbusy_quirk <= 1; // Hellfire JP
+            else if(cart_id == "MK-1137-") fmbusy_quirk <= 1; // Hellfire EU
+            else if(cart_id == "T-68???-") schan_quirk  <= 1; // Game no Kanzume Otokuyou
+            else if(cart_id == " GM 0000") sram00_quirk <= 1; // Sonic 1 Remastered
+            // Not wired: Pier Solar (T-574023/T-574013) and Virtua Racing (MK-1229/G-7001)
+            // -- their EEPROM_STM95 / SVP blocks are commented out of system.sv.
+        end
+    end
+end
+
 // MegaDrive system -------------------------------------------------------------------
 `ifdef ZRAM_SDRAM
 wire [24:1] zram_mem_addr;
@@ -173,8 +222,9 @@ wire  [1:0] zram_mem_be;
 system megadrive (
     .MCLK(clk_sys), .CLK_Z80(clk_z80), .RESET_N(md_on),
     .LPF_MODE('1), .ENABLE_FM('1), .ENABLE_PSG('1), .DAC_LDATA(audio_left), .DAC_RDATA(audio_right),
-    .LOADING(loading != 0), .PAL('0), .EXPORT('1), .FAST_FIFO('0), .SRAM_QUIRK('0), .SRAM00_QUIRK('0),
-    .NORAM_QUIRK('0), .PIER_QUIRK('0), .SVP_QUIRK('0), .FMBUSY_QUIRK('0), .SCHAN_QUIRK('0), .TURBO('0), 
+    .LOADING(loading != 0), .PAL('0), .EXPORT('1), .FAST_FIFO(fifo_quirk), .SRAM_QUIRK(sram_quirk), .SRAM00_QUIRK(sram00_quirk),
+    .EEPROM_QUIRK(eeprom_quirk), .NORAM_QUIRK(noram_quirk), .PIER_QUIRK('0), .SVP_QUIRK('0),
+    .FMBUSY_QUIRK(fmbusy_quirk), .SCHAN_QUIRK(schan_quirk), .TURBO('0), 
     .GG_RESET('0), .GG_EN('0), .GG_CODE('0), .GG_AVAILABLE(),
     .BRAM_A(), .BRAM_DI(), .BRAM_DO(), .BRAM_WE(), .BRAM_CHANGE(),
     .RED(red), .GREEN(green), .BLUE(blue), .VS(), .HS(hsync), .HBL(hblank), .VBL(vblank), .CE_PIX(ce_pix), 
@@ -196,10 +246,6 @@ system megadrive (
 
 
 reg [2:0] loading_r;
-// 23 bits = 8 MB, the whole ROM area of the SDRAM (0000000-07FFFFF). It was 22 bits (4 MB):
-// a ROM of exactly 4 MB wrapped the size to 0 (every ROM read returned 0, the game could not
-// boot), and a larger one (SSF2, 5 MB) overwrote its own start.
-reg [22:0] loader_addr, loader_addr_next;       // byte address, rom size after load complete
 reg loader_req;
 wire sdram_busy;
 always @(posedge clk_sys) begin
