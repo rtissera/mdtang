@@ -11,6 +11,18 @@ set dev [lindex $argv 0]
 # Removes the 32-line buffer AND the once-per-frame core pause. See src/plla/pll_exact.v,
 # src/framebuffer_exact.sv, hdmi mode 201.
 set exact 0
+# NUKED FM (2026-09-26): gate-level YM3438 (src/nuked_fm/) instead of jt12. Console 60K
+# ONLY -- it costs ~6k FF / ~3.6k CLS, which Primer 25K does not have (825 CLS free).
+# jt12 stays the default on every other target.
+set nukedfm 0
+if {$dev eq "console60k_exact_nukedfm"} {
+    set nukedfm 1
+    set dev "console60k_exact"
+}
+if {$dev eq "console60k_nukedfm"} {
+    set nukedfm 1
+    set dev "console60k"
+}
 if {$dev eq "console60k_exact"} {
     set exact 1
     set dev "console60k"
@@ -30,6 +42,10 @@ if {$dev eq "mega60k"} {
     set_device GW5AT-LV60PG484AC1/I0 -device_version B
     add_file -type verilog "src/boards/console.v"
     add_file -type cst "src/boards/console.cst"
+    if {$nukedfm} {
+        # defines NUKED_FM; must come before system.sv, like config_exact.v
+        add_file -type verilog "src/config_nukedfm.v"
+    }
     if {$exact} {
         add_file -type verilog "src/config_exact.v"
         add_file -type verilog "src/plla/pll_exact.v"
@@ -103,11 +119,10 @@ if {$exact} {
 } else {
     add_file -type sdc "src/mdtang.sdc"
 }
-if {$exact} {
-    set_option -output_base_name mdtang_${dev}_exact
-} else {
-    set_option -output_base_name mdtang_${dev}
-}
+set suffix ""
+if {$exact} { append suffix "_exact" }
+if {$nukedfm} { append suffix "_nukedfm" }
+set_option -output_base_name mdtang_${dev}${suffix}
 
 add_file -type verilog "src/iosys/iosys_bl616.v"
 add_file -type verilog "src/iosys/uart_fixed.v"
@@ -136,6 +151,13 @@ if {$exact} {
     add_file -type verilog "src/framebuffer_exact.sv"
 } else {
     add_file -type verilog "src/framebuffer_sync.sv"
+}
+if {$nukedfm} {
+    foreach f {ym3438 ym3438_ch ym3438_detune ym3438_eg ym3438_fsm ym3438_io ym3438_lfo
+               ym3438_op ym3438_pg ym3438_prescaler ym3438_regs ym_lib} {
+        add_file -type verilog "src/nuked_fm/$f.v"
+    }
+    add_file -type verilog "src/peripherals/nuked_fm_md.v"
 }
 add_file -type verilog "src/jt12/adpcm/jt10_adpcm_div.v"
 add_file -type verilog "src/jt12/jt12.v"

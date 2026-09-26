@@ -1,5 +1,6 @@
 // mdtang: copied verbatim from drizzt/openfpga-MegaDrive v0.3.0 (963ac0d) rtl/upstream/nuked-md/ym3438_io.v,
 // itself from nukeykt/Nuked-MD-FPGA. GPL-2.0-or-later, see LICENSE in this directory.
+// ONE local change: status_time reload 40M -> 20M (marked 'mdtang:' below).
 module ym3438_io
 	(
 	input MCLK,
@@ -212,7 +213,9 @@ module ym3438_io
 			data_o_r <= debug_data;
 
 		if (read_status | read_debug)
-			status_time <= 26'd40000000;
+			// mdtang: 20M, not 40M. Upstream counts a 107.4 MHz MCLK; mdtang runs this at
+			// 53.7 MHz, so 20M keeps the same ~0.37 s status-bus decay.
+			status_time <= 26'd20000000;
 		else if (status_time)
 			status_time <= status_time - 1;
 		else

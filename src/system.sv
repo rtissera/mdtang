@@ -220,6 +220,9 @@ wire M68K_CLKEN = M68K_CLKENp;
 reg  M68K_CLKENp, M68K_CLKENn;
 reg  Z80_CLKENp, Z80_CLKENn, PSG_CLKEN;
 reg  FM_CLKEN;
+`ifdef NUKED_FM
+reg  FM_PHI = 1'b0;	// Nuked YM3438 master clock as a LEVEL: MCLK/7, 4 high / 3 low
+`endif
 reg clk_z80_cycle;			// 0: CLK_Z80 is high (first half), 1: low (second half)
 always @(posedge MCLK) if (CLK_Z80) clk_z80_cycle <= 1;
 reg pause_reg;				// PAUSE_EN registered on whole m68k cycle
@@ -283,6 +286,9 @@ always @(posedge MCLK) begin
 		end
 
 		FM_CLKEN <= 0;
+`ifdef NUKED_FM
+		FM_PHI <= (FCLKCNT < 4);	// same /7 counter as FM_CLKEN
+`endif
 		FCLKCNT <= FCLKCNT + 1'b1;
 		if (FCLKCNT == 6) begin
 			FCLKCNT <= 0;
@@ -1392,6 +1398,12 @@ wire       ZBUS_NO_BUSY = ZBUS_A[14] && ~|ZBUS_A[13:2] && |ZBUS_A[1:0] && FMBUSY
 reg        ZBUS_SEL;
 reg [14:0] ZBUS_A;
 reg        ZBUS_WE;
+`ifdef NUKED_FM
+// Read strobe for the Nuked FM chip: like ZBUS_WE, set in ZBUS_IDLE and high for exactly
+// the one cycle the machine spends in ZBUS_READ. The chip registers its status on that
+// edge, so FM_DO is valid in ZBUS_FINISH where ZBUS_DI is sampled. jt12 needs no strobe.
+reg        ZBUS_RD;
+`endif
 reg  [7:0] ZBUS_DO;
 wire [7:0] ZBUS_DI = ZRAM_SEL ? ZRAM_DO : (FM_SEL ? (ZBUS_NO_BUSY ? {1'b0, FM_DO[6:0]} : FM_DO) : 8'hFF);
 
@@ -1460,6 +1472,9 @@ always @(posedge MCLK) begin
 				ZBUS_SDRAM  = 3;    // ZRAM_SDRAM only: waiting for the SDRAM channel
 
 	ZBUS_WE <= 0;
+`ifdef NUKED_FM
+	ZBUS_RD <= 0;
+`endif
 
 	if (reset) begin
 		MBUS_ZBUS_DTACK_N <= 1;
@@ -1487,6 +1502,9 @@ always @(posedge MCLK) begin
 					ZBUS_A <= {MBUS_A[14:1], MBUS_UDS_N};
 					ZBUS_DO <= (~MBUS_UDS_N) ? MBUS_DO[15:8] : MBUS_DO[7:0];
 					ZBUS_WE <= ~MBUS_RNW & ZBUS_FREE;
+`ifdef NUKED_FM
+					ZBUS_RD <=  MBUS_RNW & ZBUS_FREE;
+`endif
 `ifdef ZRAM_SDRAM
 					ZRAM_SEL_R <= ~MBUS_A[14];
 					ZBUS_WE_R  <= ~MBUS_RNW & ZBUS_FREE;
@@ -1498,6 +1516,9 @@ always @(posedge MCLK) begin
 					ZBUS_A <= Z80_A[14:0];
 					ZBUS_DO <= Z80_DO;
 					ZBUS_WE <= ~Z80_WR_N;
+`ifdef NUKED_FM
+					ZBUS_RD <=  Z80_WR_N;
+`endif
 `ifdef ZRAM_SDRAM
 					ZRAM_SEL_R <= ~Z80_A[14];
 					ZBUS_WE_R  <= ~Z80_WR_N;
@@ -1595,6 +1616,26 @@ wire signed [15:0] PRE_LPF_L;
 wire signed [15:0] PRE_LPF_R;
 
 `ifndef NO_SOUND
+`ifdef NUKED_FM
+// Gate-level YM3438 (src/nuked_fm/, glue in src/peripherals/nuked_fm_md.v). LADDER picks
+// the YM2612 DAC (MOL_2612) over the YM3438 one. No hi-fi PCM mode: the DAC channel is
+// the real chip's.
+nuked_fm_md fm
+(
+	.clk(MCLK),
+	.ic_n(Z80_RESET_N),
+	.phi(FM_PHI),
+	.cs_n(~(FM_SEL & (ZBUS_WE | ZBUS_RD))),
+	.wr_n(~(FM_SEL & ZBUS_WE)),
+	.rd_n(~(FM_SEL & ZBUS_RD)),
+	.addr(ZBUS_A[1:0]),
+	.din(ZBUS_DO),
+	.dout(FM_DO),
+	.ladder(LADDER),
+	.snd_left(FM_left),
+	.snd_right(FM_right)
+);
+`else
 jt12 fm
 (
 	.rst(~Z80_RESET_N),
@@ -1612,9 +1653,25 @@ jt12 fm
 	.snd_right(FM_right)
 );
 `endif
+`endif
 
+`ifdef NUKED_FM
+// Level trim so Nuked sits where jt12 did against the PSG. Measured in
+// sim/nuked_fm (same register writes into both, RMS after jt12's x22.25 above):
+// jt12/Nuked = 1.855 for any single channel (both DAC modes, 4 patches), 1.485 for a
+// 3-channel chord. x1.75 splits it: single channel -0.5 dB, chords +1.4 dB vs jt12.
+// Nuked's full scale (6 ch x 4 slots x 255, x4) is +-24.5k, so x1.75 can exceed 16 bits:
+// widen and saturate instead of letting it wrap.
+wire signed [17:0] fm_wide_l = FM_left;     // sign-extends: both sides signed
+wire signed [17:0] fm_wide_r = FM_right;
+wire signed [17:0] fm_trim_l = fm_wide_l + (fm_wide_l >>> 1) + (fm_wide_l >>> 2);
+wire signed [17:0] fm_trim_r = fm_wide_r + (fm_wide_r >>> 1) + (fm_wide_r >>> 2);
+wire signed [15:0] fm_adjust_l = (fm_trim_l > 18'sd32767) ? 16'sh7FFF : (fm_trim_l < -18'sd32768) ? 16'sh8000 : fm_trim_l[15:0];
+wire signed [15:0] fm_adjust_r = (fm_trim_r > 18'sd32767) ? 16'sh7FFF : (fm_trim_r < -18'sd32768) ? 16'sh8000 : fm_trim_r[15:0];
+`else
 wire signed [15:0] fm_adjust_l = (FM_left  << 4) + (FM_left  << 2) + (FM_left  << 1) + (FM_left  >>> 2);
 wire signed [15:0] fm_adjust_r = (FM_right << 4) + (FM_right << 2) + (FM_right << 1) + (FM_right >>> 2);
+`endif
 
 `ifndef NO_SOUND
 genesis_fm_lpf fm_lpf_l
