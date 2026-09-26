@@ -8,11 +8,12 @@
 
 static Vtb_nuked_io *t;
 static uint64_t cyc = 0;
+static bool paused = false;   // core pause: 68k CE stops (non-exact builds, once per frame)
 static int ndiff = 0, nreads = 0;
 static const double MCLK_HZ = 53693175.0;
 
 static void tick() {
-	t->ce = (cyc % 7) == 0;
+	t->ce = !paused && (cyc % 7) == 0;
 	t->clk = 0; t->eval();
 	t->clk = 1; t->eval();
 	cyc++;
@@ -94,6 +95,12 @@ int main(int argc, char **argv) {
 	wait_us(1600);
 	wr(1, 0x00); rd("TH=0 after 1.6 ms (normal ?0SA00DU expected)", 1);
 	wr(1, 0x40); rd("TH=1 (normal ?1CBRLDU expected)", 1);
+	printf(" 3f 2 TH pulses, 2 ms core pause (CE stopped), resume (68k saw no time: count kept)\n");
+	wait_us(2000);
+	wr(1, 0x40); wr(1, 0x00); wr(1, 0x40); wr(1, 0x00); wr(1, 0x40);
+	paused = true; wait_us(2000); paused = false;
+	wr(1, 0x00); rd("TH=0 #3 after pause (ID nibble 0 expected)", 1);
+	wr(1, 0x40); rd("TH=1 #3 (MODE X Y Z expected)", 1);
 	printf(" 3d 3-button game on a 6-button pad: one TH pulse per frame (16.7 ms)\n");
 	for (int f = 0; f < 3; f++) { wr(1, 0x40); rd("frame TH=1", 1); wr(1, 0x00); rd("frame TH=0", 1); wait_us(16700); }
 	printf(" 3e 3-button-style double read every 1 ms (<1.5 ms: counter advances)\n");

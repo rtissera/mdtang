@@ -26,7 +26,7 @@ module gen_io_nuked
 (
 	input            RESET,
 	input            CLK,
-	input            CE,          // unused: the chip runs on MCLK with its own VCLK level
+	input            CE,          // 68k clock enable: times the pad models only (see md_pad)
 
 	input            J3BUT,
 
@@ -169,7 +169,7 @@ assign pc_i = (pc_d & 7'h7F) | (~pc_d & pc_o);  // port C: nothing plugged, pull
 always @(posedge CLK) HL <= hl_n;
 
 md_pad pad_1(
-	.clk(CLK), .reset(RESET), .j3but(J3BUT),
+	.clk(CLK), .ce(CE), .reset(RESET), .j3but(J3BUT),
 	.th_d(pa_d[6]), .th_o(pa_o[6]), .th(th1),
 	.p_up(P1_UP), .p_down(P1_DOWN), .p_left(P1_LEFT), .p_right(P1_RIGHT),
 	.p_a(P1_A), .p_b(P1_B), .p_c(P1_C), .p_start(P1_START),
@@ -178,7 +178,7 @@ md_pad pad_1(
 );
 
 md_pad pad_2(
-	.clk(CLK), .reset(RESET), .j3but(J3BUT),
+	.clk(CLK), .ce(CE), .reset(RESET), .j3but(J3BUT),
 	.th_d(pb_d[6]), .th_o(pb_o[6]), .th(th2),
 	.p_up(P2_UP), .p_down(P2_DOWN), .p_left(P2_LEFT), .p_right(P2_RIGHT),
 	.p_a(P2_A), .p_b(P2_B), .p_c(P2_C), .p_start(P2_START),
@@ -190,14 +190,15 @@ endmodule
 
 
 // Sega 3/6-button pad, as seen from its connector. Buttons are active low (pin levels).
-// Same protocol and timings as gen_io's pad_io, but counted in MCLK (x7), so they no
-// longer depend on the 68k clock enable (pause/turbo):
-//   - TH follows the console's TH output; when the console stops driving it, the pull-up
-//     takes it high after 210 x 7 MCLK (~27 us).
-//   - rising TH edges count 0..3 (6-button); 1.5 ms (11600 x 7 MCLK) after the last
-//     falling edge the counter returns to 0. J3BUT holds it at 0 (3-button pad).
+// Same protocol and timings as gen_io's pad_io. TH follows the chip's pin every MCLK; the
+// two timers count 68k clock enables, as gen_io does, so a core pause (non-exact builds
+// stop CE once per frame) or turbo scales them with the 68k instead of real time:
+//   - when the console stops driving TH, the pull-up takes it high after 210 CE (~27 us).
+//   - rising TH edges count 0..3 (6-button); 11600 CE (1.5 ms) after the last falling
+//     edge the counter returns to 0. J3BUT holds it at 0 (3-button pad).
 module md_pad(
 	input        clk,
+	input        ce,
 	input        reset,
 	input        j3but,
 	input        th_d,       // console TH direction: 1 = console input (not driving)
@@ -210,7 +211,7 @@ module md_pad(
 
 reg  [1:0] jcnt;
 reg [16:0] jtmr;
-reg [10:0] fltmr;
+reg  [7:0] fltmr;
 reg        thd;
 
 always @(*) begin
@@ -228,22 +229,20 @@ always @(posedge clk or posedge reset) begin
 		thd   <= 1'b1;
 		jcnt  <= 2'd3;
 		jtmr  <= 17'd0;
-		fltmr <= 11'd0;
+		fltmr <= 8'd0;
 	end
 	else begin
-		if (~&fltmr) fltmr <= fltmr + 11'd1;
-		if (~th_d) begin
-			th    <= th_o;
-			fltmr <= 11'd0;
-		end
-		else if (fltmr == 11'd1470) th <= 1'b1;
+		if (~th_d) th <= th_o;
+		else if (ce && fltmr == 8'd210) th <= 1'b1;
+		if (~th_d) fltmr <= 8'd0;
+		else if (ce && ~&fltmr) fltmr <= fltmr + 8'd1;
 
 		thd <= th;
-		if (jtmr > 17'd81200 || j3but) jcnt <= 2'd0;
+		if ((ce && jtmr > 17'd11600) || j3but) jcnt <= 2'd0;
 		if (~thd & th) jcnt <= jcnt + 2'd1;
 
-		if (~&jtmr) jtmr <= jtmr + 17'd1;
 		if (thd & ~th) jtmr <= 17'd0;
+		else if (ce && ~&jtmr) jtmr <= jtmr + 17'd1;
 	end
 end
 
