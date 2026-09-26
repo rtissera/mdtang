@@ -42,6 +42,7 @@ module framebuffer_exact #(
     input [$clog2(HEIGHT)-1:0] y,
     input [10:0] width,             // 256 (H32) or 320 (H40)
     input [9:0] height,             // 224 or 240
+    input vblank,                   // y holds 0 through vblank; line 0 starts when it ends
 
     output pause_core,              // tied low: an exact lock never needs to stall the core
 
@@ -82,11 +83,13 @@ reg [$clog2(HEIGHT)-1:0] y_r = 0;
 
 always @(posedge clk) begin
     y_r <= y;
+    // restart at buffer 0 on source line 0 so line s always lands in buffer s mod 3;
+    // otherwise the phase slips against the read side (which restarts every frame).
+    // Checked EVERY clock: y changes on hblank, not on ce_pix, so a ce_pix-gated check
+    // almost never saw it (first hardware build: black screen).
+    if (y != y_r)
+        wr_sel <= (y == 0 || wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
     if (ce_pix) begin
-        // restart at buffer 0 on source line 0 so line s always lands in buffer s mod 3;
-        // otherwise the phase slips against the read side (which restarts every frame)
-        if (y != y_r)
-            wr_sel <= (y == 0 || wr_sel == N_LINE_BUF-1) ? 2'd0 : wr_sel + 2'd1;
         if (x < width)
             linebuf[wr_sel*WIDTH + x] <= {b, g, r};
     end
@@ -113,8 +116,12 @@ reg frame_tog   = 1'b0;
 reg fs_meta     = 1'b0, fs_sync = 1'b0, fs_sync_r = 1'b0;
 reg vreset      = 1'b0;
 
+// Line 0 starts when vblank ENDS: y is already 0 through the whole vblank (mdtang_top.sv
+// zeroes it there), so the y -> 0 edge is the end of the frame, ~38 lines too early.
+reg vblank_r = 1'b0;
 always @(posedge clk) begin
-    if (ce_pix && y == 0 && y_r != 0)
+    vblank_r <= vblank;
+    if (vblank_r && !vblank)
         frame_tog <= ~frame_tog;
 end
 

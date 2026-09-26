@@ -375,7 +375,7 @@ framebuffer_exact #(
 ) fb (
     .clk(clk_sys), .resetn(~reset), .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .ce_pix(ce_pix & hsync_seen), .r(red), .g(green), .b(blue), .x(x), .y(y),
-    .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224),
+    .width(resolution[0] ? 320 : 256), .height(resolution[1] ? 240 : 224), .vblank(vblank),
     .audio_left(audio_left), .audio_right(audio_right),
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
     .pause_core(pause_core),
