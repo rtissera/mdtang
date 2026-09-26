@@ -11,6 +11,15 @@ set dev [lindex $argv 0]
 # Removes the 32-line buffer AND the once-per-frame core pause. See src/plla/pll_exact.v,
 # src/framebuffer_exact.sv, hdmi mode 201.
 set exact 0
+# NUKED IO (2026-09-26): gate-level YM6046 I/O controller (src/nuked_io/) instead of
+# gen_io, with 3/6-button pad models on its pins. Opt-in; gen_io stays the default.
+set nukedio 0
+foreach t {console60k_exact primer25k_exact console60k} {
+    if {$dev eq "${t}_nukedio"} {
+        set nukedio 1
+        set dev $t
+    }
+}
 if {$dev eq "console60k_exact"} {
     set exact 1
     set dev "console60k"
@@ -103,11 +112,17 @@ if {$exact} {
 } else {
     add_file -type sdc "src/mdtang.sdc"
 }
-if {$exact} {
-    set_option -output_base_name mdtang_${dev}_exact
-} else {
-    set_option -output_base_name mdtang_${dev}
+if {$nukedio} {
+    # defines NUKED_IO; must come before multitap.sv
+    add_file -type verilog "src/config_nukedio.v"
+    add_file -type verilog "src/nuked_io/ym_lib.v"
+    add_file -type verilog "src/nuked_io/ym6046.v"
+    add_file -type verilog "src/peripherals/nuked_io_md.sv"
 }
+set suffix ""
+if {$exact} { append suffix "_exact" }
+if {$nukedio} { append suffix "_nukedio" }
+set_option -output_base_name mdtang_${dev}${suffix}
 
 add_file -type verilog "src/iosys/iosys_bl616.v"
 add_file -type verilog "src/iosys/uart_fixed.v"

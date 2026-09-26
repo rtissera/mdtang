@@ -85,7 +85,12 @@ module multitap
 );
 
 wire [7:0] GEN_DO;
+`ifdef NUKED_IO
+// Gate-level YM6046 + pad models (src/peripherals/nuked_io_md.sv): same ports as gen_io.
+gen_io_nuked io
+`else
 gen_io io
+`endif
 (
 	.*,
 
