@@ -943,7 +943,11 @@ always @(posedge MCLK) begin
 					data <= NO_DATA;
 					MBUS_DO <= M68K_DO;
 					MBUS_RNW <= M68K_RNW;
-					mstate <= MBUS_WAIT_FOR_S4; 
+					// Reads: UDS/LDS/RNW are already valid when AS falls (68000 S2), so a read
+					// can start at once. Only writes need the one-cycle wait below for UDS/LDS.
+					// Waiting on reads too made every 68k access miss fx68k's DTACK sample and
+					// take one wait state: 68k code ran ~18% slow (measured, measure/68k-waits).
+					mstate <= M68K_RNW ? MBUS_SELECT : MBUS_WAIT_FOR_S4;
 				end
 				else if (VBUS_SEL && VDP_MBUS_DTACK_N) begin
 					msrc <= MSRC_VDP;
@@ -970,8 +974,14 @@ always @(posedge MCLK) begin
 									// cycle) on the rising edge of the clock."
 									// --> UDS/LDS is delayed one full clock cycle for writes
 									//     So we wait a cycle here.
-			if (M68K_CLKENp)
-				mstate <= MBUS_SELECT;
+			begin
+				// Work-RAM writes are posted: DTACK now, so the 68k sees a zero-wait cycle,
+				// while the SDRAM write still starts once UDS/LDS are valid (S4) and finishes
+				// long before the next access (AS earliest ~28 MCLK later).
+				if (~MBUS_RNW && &MBUS_A[23:21]) M68K_MBUS_DTACK_N <= 0;
+				if (M68K_CLKENp)
+					mstate <= MBUS_SELECT;
+			end
 
 		MBUS_Z80_PREREAD:
 			begin
