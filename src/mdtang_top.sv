@@ -256,7 +256,7 @@ wire  [1:0] zram_mem_be;
 
 system megadrive (
     .MCLK(clk_sys), .CLK_Z80(clk_z80), .RESET_N(md_on),
-    .LPF_MODE('1), .ENABLE_FM('1), .ENABLE_PSG('1), .DAC_LDATA(audio_left), .DAC_RDATA(audio_right),
+    .LPF_MODE(2'b00), .ENABLE_FM('1), .ENABLE_PSG('1), .DAC_LDATA(audio_left), .DAC_RDATA(audio_right),
     .LOADING(loading != 0), .PAL(md_pal), .EXPORT(md_export), .FAST_FIFO(fifo_quirk), .SRAM_QUIRK(sram_quirk), .SRAM00_QUIRK(sram00_quirk),
     .EEPROM_QUIRK(eeprom_quirk), .NORAM_QUIRK(noram_quirk), .PIER_QUIRK('0), .SVP_QUIRK('0),
     .FMBUSY_QUIRK(fmbusy_quirk), .SCHAN_QUIRK(schan_quirk), .TURBO('0), 
@@ -275,7 +275,7 @@ system megadrive (
     .ZRAM_MEM_WE(zram_mem_we), .ZRAM_MEM_BE(zram_mem_be),
     .ZRAM_MEM_REQ(zram_mem_req), .ZRAM_MEM_ACK(zram_mem_ack),
 `endif
-    .EN_HIFI_PCM('0), .LADDER('0), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
+    .EN_HIFI_PCM('0), .LADDER(1'b1), .OBJ_LIMIT_HIGH('0), .TRANSP_DETECT(),
     .PAUSE_EN(pause_core), .BGA_EN('1), .BGB_EN('1), .SPR_EN('1), .DBG_M68K_A(), .DBG_VBUS_A()
 );
 
