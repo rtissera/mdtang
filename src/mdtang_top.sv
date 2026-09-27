@@ -105,16 +105,12 @@ wire clk_z80;       // 26.85Mhz (1/2 clk_sys)
 // EXACT LOCK (2026-09-22): one VCO for core, SDRAM, Z80 and both video clocks, so every
 // source line is exactly two output lines -- no frame buffer and no core pause needed.
 // See src/plla/pll_exact.v and src/framebuffer_exact.sv.
-wire clk_z80_unused;
-pll_exact pll(.clkin(clk50), .clkout0(clk_sys), .clkout1(O_sdram_clk), .clkout2(clk_z80_unused),
+// The Z80 clock is the PLL's own /2 output, phase 0, as in the stock build. An earlier
+// version divided clk_sys with a CLKDIV instead; static timing passed, but on hardware
+// Castlevania Bloodlines had no sound, flickered and could lock up going in-game, and
+// taking the PLL output fixed all three (Console 60K, 2026-09-27).
+pll_exact pll(.clkin(clk50), .clkout0(clk_sys), .clkout1(O_sdram_clk), .clkout2(clk_z80),
               .clkout3(hclk), .clkout4(hclk5));
-// The Z80 clock is clk_sys/2 BY DEFINITION, so divide the core clock itself rather than
-// taking a second PLL output (which the stock build does): the two edges then cannot
-// separate. system.sv crosses MCLK -> CLK_Z80 with a single flop for bus request and
-// reset, so that crossing's hold margin is only as good as the skew between them.
-CLKDIV #(.DIV_MODE("2")) z80_div (
-    .CLKOUT(clk_z80), .HCLKIN(clk_sys), .RESETN(1'b1), .CALIB(1'b0)
-);
 assign clk27 = 1'b0;            // the 27 MHz chain existed only to reach 74.25 MHz
 `else
 pll pll(.clkin(clk50), .clkout0(clk_sys), .clkout1(O_sdram_clk), .clkout2(clk_z80));

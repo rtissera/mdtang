@@ -217,12 +217,9 @@ set_option -use_cpu_as_gpio 1
 
 # use the slower but timing-optimized place algorithm
 if {$exact} {
-    # PLACEMENT, not structure, decided whether the two clk_sys -> clk_z80 control paths
-    # (Z80 bus request and reset, crossed with a single flop in system.sv) met hold: with
-    # place_option 2 they missed by 14 and 26 ps, with 1 or 3 they pass outright. Option 1
-    # also leaves the most core-clock margin (+8.7% vs +0.8% for option 3).
-    # `set_option -correct_hold_violation 1` did NOT fix them, and neither did phase-
-    # shifting the Z80 clock output.
+    # Option 1 leaves the most core-clock margin. (This note used to be about hold on the
+    # clk_sys -> clk_z80 crossing when the Z80 clock came from a CLKDIV; it now comes from
+    # the PLL, see mdtang_top.sv.)
     set_option -place_option 1
 } else {
     set_option -place_option 2

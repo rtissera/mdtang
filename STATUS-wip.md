@@ -18,14 +18,17 @@ top of `master`:
 | Gunstar Heroes | no sound | sound (to be checked against a reference) |
 | Mortal Kombat 3 | no sound | sound |
 | Lightening Force | no sound | sound and music |
-| Castlevania Bloodlines | locks going in-game | gets in-game, **no sound** |
+| Castlevania Bloodlines | locks going in-game | gets in-game, sound and music |
 | Sonic 1 / 2 / 3, Sonic & Knuckles | boot | Sonic 2 re-checked, OK |
 | Super Street Fighter II | boots (4 MB) | not re-checked |
 | SF2 Special Champion Edition | 6-button OK | not re-checked |
 
+Castlevania Bloodlines was silent, flickered and could lock up only in the exact-lock
+builds. The cause was the Z80 clock: those builds divided the core clock with a CLKDIV.
+Taking the PLL's /2 output instead, as the stock build does, fixed all three on hardware.
+
 ## Open
 
-- Castlevania Bloodlines: no sound in-game.
 - Primer 25K builds and meets timing; not tested on hardware.
 - Nano 20K: does not fit (about 10 BSRAM short).
 - Exact-lock builds are NTSC only; PAL (576p50) is planned.
